@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Gaia Email: Taipei Jan 2014</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+    <link rel="stylesheet" href="fira-woff.css">
+    <style type="text/css">
+body {
+  font-family: 'Fira Sans';
+  /* out of box, I'm finding the text too small... */
+  font-size: 200%;
+}
+
+.remark-slide .remark-slide-content {
+  /* compensate for cranking font size way up */
+  padding: 0.5em 2em;
+}
+
+li {
+  padding: 0.2em;
+}
+
+.gray {
+  color: gray;
+}
+
+    </style>
+  </head>
+  <body>
+    <textarea id="source">
+
+class: center, middle
+
+# The Gaia E-Mail App
+
+Andrew Sutherland (:asuth)
+
+---
+
+# Spaceship View
+
+* Front-End:
+  * UI Stuff
+  * Main Thread
+  * lives in the gaia repo
+* Back-End:
+  * Reusable e-mail domain logic
+  * Worker Thread
+  * lives in the gaia-email-libs-and-more repo
+
+---
+
+# Birds-Eye View: Front-End
+
+* Front-End
+  * Cards!
+  * Fast startup...
+  * Remote main-page-only APIs for the worker...
+
+
+---
+
+# Birds-Eye View: Front-End
+
+* Front-End
+  * Fast startup:
+    * Cache default Inbox HTML in a cookie, restore on startup
+    * Lazy-load cards
+      * r.js optimized JS + inlined HTML snippet templates
+    * Lazy-load the back-end
+
+---
+
+# Birds-Eye View: Front-End
+
+* Front-End
+  * Remote main-page-only APIs for the worker:
+    * IndexedDB
+    * mozTCPSocket
+    * mozNotifications
+    * mozAlarms
+    * mozContacts
+    * DeviceStorage
+    * DOM-based XML parsing
+
+---
+
+# Birds-Eye View: Back-End
+
+* Back-End
+  * Worker Thread 
+  * Protocols (SMTP, IMAP4, ActiveSync, POP3)
+  * MIME Parsing / Generation
+  * HTML Sanitization
+  * Database 
+
+---
+
+# Front-End / Back-End Communication
+
+* MailAPI
+  * Friendly abstraction with helper objects
+  * UI code should never see back-end data reps
+* MailBridge
+  * Communicates via postMessage()
+  * Simple one-off commands...
+  * ViewSlices: persistent views/subscriptions...
+
+---
+
+# FEBE: Simple Commnads
+
+```json
+{
+  "type": "tryToCreateAccount",
+  "handle": 3,
+  "details": {
+    "displayName": "Baron von Testendude",
+    "emailAddress": "testy@fakeimaphost",
+    "password": "testy",
+    "accountName": null
+  },
+  "domainInfo": null
+}
+```
+
+---
+
+# BEFE: Simple Commnads
+
+```json
+{
+  "type": "tryToCreateAccountResults",
+  "handle": 3,
+  "account": {
+    "id": "0",
+    "name": "testy@fakeimaphost",
+    "type": "imap+smtp",
+    ...
+  },
+  "error": null,
+  "errorDetails": null
+}  
+```
+
+---
+
+# ViewSlices (1/2)
+
+* Long-lived data subscriptions
+* Like Backbone Collections and others: onadd / onchange / onremove
+* But subscribe to a specific subset:
+  * Messages from timestamp X id Y through 'now'
+  * Only hear about adds / changes / removes inside that range
+* Mainly for messages: Used for accounts and folders too, but not going to
+  optimize for users with 1,000 folders.
+
+---
+
+# ViewSlices (1/2)
+
+* Grow: Request more messages from the back-end
+* Shrink: Tell the back-end we no longer care about some messages
+* Directly integrates with (IMAP/POP3) synchronization
+  * Triggered by asking to grow and explicitly passing a flag to indicate we're
+    willing to spend the bandwidth.
+* Extra state:
+  * at 'top' / 'bottom' of message store
+  * can we fetch more messages
+  * are we currently synchronizing?
+
+---
+
+# FEBE: open slice
+
+```javascript
+MailAPI.viewFolderMessages(someFolder);
+```
+
+```json
+{
+  "type": "viewFolderMessages",
+  "folderId": "0/8",
+  "handle": 14
+}
+```
+
+---
+# BEFE: splices
+
+```json
+{
+  "type": "sliceSplice",
+  "handle": 14,
+  "index": 0,
+  "howMany": 0,
+  "addItems": [],
+  "requested": false,
+  "moreExpected": true,
+  "status": "synchronizing",
+  "progress": 0.02,
+  "atTop": false,
+  "atBottom": false,
+  "userCanGrowUpwards": false,
+  "userCanGrowDownwards": false
+}
+```
+
+---
+```json
+{
+  "type": "sliceSplice",
+  "handle": 14,
+  "index": 0,
+  "howMany": 0,
+  "addItems": [
+    {
+      "id": 0, "srvid": 1, "suid": "0/8/0",
+      "guid": "4@made.up",
+      "author": {
+        "address": "idina@ivarsson.nul",
+        "name": "Idina Ivarsson"
+      },
+      "to": [
+        {
+          "address": "johnny@jones.nul",
+          "name": "Johnny Jones"
+        }
+      ],
+      ...
+```
+
+---
+
+# Logging and Tests
+
+* The back-end is instrumented with logging code.
+* Loggers have three modes:
+  1. Just count events for telemtry purposes
+  2. Log non-sensitive data (first set of args)
+  3. Test mode: log all data passed (second set of args)
+
+---
+
+# Logging and Tests
+
+```javascript
+// Events
+account._LOG.createConnection(label);
+imapProto._LOG.data(chunk.length, chunk);
+
+// Errors
+account._LOG.opError(mode, type, exception);
+
+// Asynchronous things
+imapProto._LOG.cmd_begin(prefix, cmd, args);
+imapProto._LOG.cmd_end(prefix, cmd, args);
+account._LOG.runOp_begin(mode, op.type,
+                         /* no err*/ null, op);
+account._LOG.runOp_end(mode, op.type, err, op);
+```
+
+---
+
+# Logging and Tests
+
+Unit tests specify expectations about what the loggers will log.  Actors are the
+counterpart to loggers.
+
+```javascript
+// Try and sync folders while there's a network problem
+eAccount.expect_runOp_begin('do', 'syncFolderList',
+                            null);
+eAccount.expect_createConnection('syncFolderList');
+eAccount.expect_deadConnection();
+eAccount.expect_runOp_end('do', 'syncFolderList',
+                          'defer');
+```
+
+---
+
+# Logging and Tests
+
+* Loggers and expectations on them are independent.
+  * Lots of asynchronous things are going on.
+* Test steps consist of:
+  * Saying what loggers/actors are relevant to the test step
+    * No need to specify what every logger will report
+  * Setting expectations on the actors
+  * Waiting for all the actors to complete, cause errors, or for a timeout.
+
+---
+
+# Logging and Tests
+
+Test helpers mix-in helper functions to the actors that can generate one or more
+test steps with much stricter expectations than would be reasonable to do by
+hand.
+
+```javascript
+testUniverse = T.actor('testUniverse', 'U');
+testAccount = T.actor('testAccount', 'A',
+                      { universe: testUniverse });
+
+emptyFolder = testAccount.do_createTestFolder(
+                'test_empty_sync', { count: 0 });
+```
+
+---
+
+# Logging
+
+* Logs are available at run-time too!
+  * Secret Debug Mode lets you turn logging on for level 2/3.
+  * Logs put in a 60-second circular buffer that can be saved to DeviceStorage
+    on demand.
+
+---
+
+# More info...
+
+https://wiki.mozilla.org/Gaia/Email
+
+    </textarea>
+    <script src="remark.min.js" type="text/javascript">
+    </script>
+    <script type="text/javascript">
+      var slideshow = remark.create();
+    </script>
+  </body>
+</html>
